@@ -56,7 +56,6 @@ def main():
         print("No new lows found.")
         return
     msg = "📉 新安値銘柄: " + ", ".join(alerts)
-" + "\n".join(results)
     print(msg)
     if LINE_NOTIFY_TOKEN:
         send_line_notify(LINE_NOTIFY_TOKEN, msg)

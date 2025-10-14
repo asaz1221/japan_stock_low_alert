@@ -55,7 +55,7 @@ def main():
     if not results:
         print("No new lows found.")
         return
-    msg = "📉 新安値銘柄:
+    msg = "📉 新安値銘柄: " + ", ".join(alerts)
 " + "\n".join(results)
     print(msg)
     if LINE_NOTIFY_TOKEN:

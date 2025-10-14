@@ -28,3 +28,12 @@ def status():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
+from flask import request, abort
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    payload = request.get_json()
+    print("Webhook received:", payload)  # ← デバッグ用
+    return "OK", 200
+

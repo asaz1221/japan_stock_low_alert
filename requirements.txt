@@ -1,0 +1,9 @@
+Flask
+gunicorn
+yfinance
+pandas
+requests
+tqdm
+python-dotenv
+sqlite-utils
+beautifulsoup4

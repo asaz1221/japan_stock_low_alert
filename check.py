@@ -3,17 +3,20 @@ import pandas as pd
 import yfinance as yf
 from tqdm import tqdm
 import requests
+from dotenv import load_dotenv
 
-# IFTTT Webhook URL（環境変数で設定）
+# .env を読み込む（UTF-8推奨）
+load_dotenv()
+
 IFTTT_WEBHOOK_URL = os.getenv("IFTTT_WEBHOOK_URL")
+if not IFTTT_WEBHOOK_URL:
+    print("⚠️ .env から IFTTT_WEBHOOK_URL が読み込めません。")
+    exit()
 
 def send_ifttt_notification(message):
-    """IFTTT Webhook経由でLINE通知"""
-    if not IFTTT_WEBHOOK_URL:
-        print("⚠️ IFTTT_WEBHOOK_URL が設定されていません。")
-        return
+    """IFTTT Webhook経由で通知"""
+    payload = {"value1": message}
     try:
-        payload = {"value1": message}
         r = requests.post(IFTTT_WEBHOOK_URL, json=payload, timeout=10)
         if r.status_code == 200:
             print("✅ IFTTT通知を送信しました")
@@ -25,7 +28,7 @@ def send_ifttt_notification(message):
 def main():
     tickers_csv = "data/tickers.csv"
     if not os.path.exists(tickers_csv):
-        print("⚠️ data/tickers.csv が見つかりません。まず jpx_fetch.py を実行してください。")
+        print("⚠️ data/tickers.csv が見つかりません。")
         return
 
     df_csv = pd.read_csv(tickers_csv, encoding="cp932")
@@ -41,27 +44,25 @@ def main():
         try:
             df_stock = yf.download(t, period="1y", progress=False)
             if df_stock.empty:
-                print(f"Error {t}: データ取得失敗")
                 continue
 
-            # MultiIndex対応: Low列だけ取り出す
-            if isinstance(df_stock.columns, pd.MultiIndex):
-                if 'Low' in df_stock.columns.get_level_values(0):
-                    df_stock = df_stock['Low']
-                    if isinstance(df_stock, pd.DataFrame):
-                        df_stock = df_stock.iloc[:, 0]
+            # Low列の取得
+            if "Low" not in df_stock.columns:
+                # MultiIndexの場合
+                if isinstance(df_stock.columns, pd.MultiIndex):
+                    low_cols = [col for col in df_stock.columns if col[0] == "Low"]
+                    if low_cols:
+                        lows = df_stock[low_cols[0]].dropna()
+                    else:
+                        print(f"Low列が見つかりません: {t}")
+                        continue
                 else:
-                    print(f"Low列が不十分: {t}")
+                    print(f"Low列が見つかりません: {t}")
                     continue
             else:
-                if 'Low' not in df_stock.columns:
-                    print(f"Low列が不十分: {t}")
-                    continue
-                df_stock = df_stock['Low']
+                lows = df_stock["Low"].dropna()
 
-            lows = df_stock.dropna()
             if len(lows) < 2:
-                print(f"Low列が不十分: {t}")
                 continue
 
             last_low = lows.iloc[-1]
@@ -76,12 +77,7 @@ def main():
 
     if not new_lows:
         print("📌 新安値は見つかりませんでした。テスト通知を送ります。")
-        # 🔹 テスト通知
-        for t in tickers:
-            name = yf.Ticker(t).info.get("shortName", "")
-            new_lows.append(f"{t} {name} 安値=TEST")
-    else:
-        print("📢 新安値銘柄:")
+        new_lows = [f"{t} {yf.Ticker(t).info.get('shortName','')} 安値=TEST" for t in tickers]
 
     msg = "📢 新安値銘柄:\n" + "\n".join(new_lows)
     print(msg)

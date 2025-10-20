@@ -1,6 +1,6 @@
 @echo off
 REM ===========================================
-REM 日本株テスト通知 一発実行（シンプル版）
+REM 日本株テスト通知 一発実行（UTF-8 .env 自動作成）
 REM ===========================================
 
 REM 1. dataフォルダを作成（なければ）
@@ -13,8 +13,10 @@ REM 2. CSVを作成（symbol列が必ず認識される）
     echo 6758.T,ソニー
 )
 
-REM 3. IFTTT環境変数をセット（YOUR_KEY を自分のキーに置き換える）
-set IFTTT_WEBHOOK_URL=https://maker.ifttt.com/trigger/stock_alert/with/key/dFCRRduzGG8v4_PP4FYiaA
+REM 3. .env を UTF-8 で作成（既存があれば上書き）
+(
+    echo IFTTT_WEBHOOK_URL=https://maker.ifttt.com/trigger/stock_alert/with/key/dFCRRduzGG8v4_PP4FYiaA
+) > .env
 
 REM 4. check.py を実行
 python check.py

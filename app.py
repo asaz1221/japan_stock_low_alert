@@ -1,19 +1,29 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import subprocess, threading, time, os
 
 app = Flask(__name__)
+
 STATUS = {"running": False, "last_run": None, "last_result": ""}
 
 def background_check():
     STATUS["running"] = True
     STATUS["last_run"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    res = subprocess.run(["python", "check.py"], capture_output=True, text=True)
-    STATUS["last_result"] = res.stdout[-1000:]
-    STATUS["running"] = False
+    try:
+        res = subprocess.run(
+            ["python", "check.py"],
+            capture_output=True,
+            text=True,
+            timeout=1800  # 最大30分
+        )
+        STATUS["last_result"] = res.stdout[-2000:]  # 最後の出力だけ保持
+    except Exception as e:
+        STATUS["last_result"] = f"Error during check: {e}"
+    finally:
+        STATUS["running"] = False
 
 @app.route("/")
 def home():
-    return "Japan Stock 1-Year Low Monitor is running."
+    return "✅ Japan Stock 1-Year Low Monitor is running."
 
 @app.route("/run", methods=["POST"])
 def run_check():
@@ -26,14 +36,13 @@ def run_check():
 def status():
     return jsonify(STATUS)
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
-
-from flask import request, abort
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    payload = request.get_json()
-    print("Webhook received:", payload)  # ← デバッグ用
+    payload = request.get_json(force=True, silent=True)
+    if not payload:
+        return "Invalid payload", 400
+    print("📩 Webhook received:", payload)
     return "OK", 200
 
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))

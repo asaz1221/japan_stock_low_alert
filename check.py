@@ -1,87 +1,107 @@
 import os
 import pandas as pd
 import yfinance as yf
-from tqdm import tqdm
 import requests
 from dotenv import load_dotenv
+from datetime import datetime
 
-# .env を読み込む（UTF-8推奨）
+# ===== 設定 =====
 load_dotenv()
 
 IFTTT_WEBHOOK_URL = os.getenv("IFTTT_WEBHOOK_URL")
+TICKERS_CSV = "data/tickers.csv"
+NOTIFIED_FILE = "data/notified.csv"   # 通知済み銘柄の永続化
+
 if not IFTTT_WEBHOOK_URL:
-    print("⚠️ .env から IFTTT_WEBHOOK_URL が読み込めません。")
-    exit()
+    raise RuntimeError("IFTTT_WEBHOOK_URL が設定されていません")
 
-def send_ifttt_notification(message):
-    """IFTTT Webhook経由で通知"""
+# ===== 通知 =====
+def send_ifttt_notification(message: str):
     payload = {"value1": message}
-    try:
-        r = requests.post(IFTTT_WEBHOOK_URL, json=payload, timeout=10)
-        if r.status_code == 200:
-            print("✅ IFTTT通知を送信しました")
-        else:
-            print(f"⚠️ 通知失敗: {r.status_code}, {r.text}")
-    except Exception as e:
-        print(f"通知エラー: {e}")
+    r = requests.post(IFTTT_WEBHOOK_URL, json=payload, timeout=10)
+    r.raise_for_status()
 
+# ===== メインロジック =====
 def main():
-    tickers_csv = "data/tickers.csv"
-    if not os.path.exists(tickers_csv):
-        print("⚠️ data/tickers.csv が見つかりません。")
+    if not os.path.exists(TICKERS_CSV):
+        print("⚠️ tickers.csv が見つかりません")
         return
 
-    df_csv = pd.read_csv(tickers_csv, encoding="cp932")
-    if "symbol" not in df_csv.columns:
-        print("⚠️ CSVに 'symbol' 列がありません。")
+    df = pd.read_csv(TICKERS_CSV, encoding="cp932")
+    if "symbol" not in df.columns:
+        print("⚠️ CSVに symbol 列がありません")
         return
-    tickers = df_csv["symbol"].dropna().tolist()
-    print(f"📈 {len(tickers)} tickers loaded")
 
-    new_lows = []
+    tickers = df["symbol"].dropna().unique().tolist()
+    print(f"📈 対象銘柄数: {len(tickers)}")
 
-    for t in tqdm(tickers, desc="Checking"):
+    # 通知済み銘柄の読み込み
+    notified = set()
+    if os.path.exists(NOTIFIED_FILE):
+        notified_df = pd.read_csv(NOTIFIED_FILE)
+        notified = set(notified_df["symbol"].astype(str))
+
+    new_hits = []
+
+    for t in tickers:
         try:
-            df_stock = yf.download(t, period="1y", progress=False)
+            df_stock = yf.download(
+                t,
+                period="1y",
+                progress=False,
+                auto_adjust=False
+            )
+
             if df_stock.empty:
                 continue
 
-            # Low列の取得
-            if "Low" not in df_stock.columns:
-                # MultiIndexの場合
-                if isinstance(df_stock.columns, pd.MultiIndex):
-                    low_cols = [col for col in df_stock.columns if col[0] == "Low"]
-                    if low_cols:
-                        lows = df_stock[low_cols[0]].dropna()
-                    else:
-                        print(f"Low列が見つかりません: {t}")
-                        continue
+            # Low 列取得（MultiIndex 対応）
+            if isinstance(df_stock.columns, pd.MultiIndex):
+                if ("Low", "") in df_stock.columns:
+                    lows = df_stock[("Low", "")].dropna()
                 else:
-                    print(f"Low列が見つかりません: {t}")
                     continue
             else:
+                if "Low" not in df_stock.columns:
+                    continue
                 lows = df_stock["Low"].dropna()
 
             if len(lows) < 2:
                 continue
 
-            last_low = lows.iloc[-1]
-            prev_min = lows.iloc[:-1].min()
+            last_low = float(lows.iloc[-1])
+            prev_min = float(lows.iloc[:-1].min())
 
-            if last_low <= prev_min:
-                name = yf.Ticker(t).info.get("shortName", "")
-                new_lows.append(f"{t} {name} 安値={last_low:.2f}")
+            # 🔴 新安値 & 未通知
+            if last_low <= prev_min and t not in notified:
+                new_hits.append(f"{t} 1年安値: {last_low:.2f}")
+                notified.add(t)
 
         except Exception as e:
-            print(f"Error {t}: {e}")
+            print(f"⚠️ {t} エラー: {e}")
 
-    if not new_lows:
-        print("📌 新安値は見つかりませんでした。テスト通知を送ります。")
-        new_lows = [f"{t} {yf.Ticker(t).info.get('shortName','')} 安値=TEST" for t in tickers]
+    # 新安値なし → 何もしない
+    if not new_hits:
+        print("📌 新安値銘柄なし")
+        return
 
-    msg = "📢 新安値銘柄:\n" + "\n".join(new_lows)
+    # 通知済み保存
+    os.makedirs(os.path.dirname(NOTIFIED_FILE), exist_ok=True)
+    pd.DataFrame({"symbol": sorted(notified)}).to_csv(
+        NOTIFIED_FILE, index=False
+    )
+
+    # 通知
+    msg = (
+        "📢 1年安値を更新した銘柄\n"
+        f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+        + "\n".join(new_hits)
+    )
+
     print(msg)
     send_ifttt_notification(msg)
+    print("✅ 通知送信完了")
 
+# ===== エントリーポイント =====
 if __name__ == "__main__":
     main()

@@ -1,12 +1,12 @@
 import pandas as pd
-import os
 import requests
 from io import BytesIO
-
-OUTPUT_DIR = "data"
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, "tickers.csv")
+import os
 
 JPX_URL = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
+
+OUTPUT_DIR = "data"
+OUTPUT_CSV = os.path.join(OUTPUT_DIR, "tickers.csv")
 
 def main():
     print("📥 JPX銘柄一覧を取得中...")
@@ -14,30 +14,31 @@ def main():
     r = requests.get(JPX_URL, timeout=30)
     r.raise_for_status()
 
-    df = pd.read_excel(BytesIO(r.content))
+    # xls（古いExcel）なので engine 指定
+    df = pd.read_excel(BytesIO(r.content), engine="xlrd")
 
-    # 列名確認
-    if "コード" not in df.columns:
-        raise RuntimeError("❌ JPXファイルに「コード」列が見つかりません")
+    # 必要な列だけ抽出
+    df = df.rename(columns={
+        "コード": "code",
+        "銘柄名": "name",
+        "市場・商品区分": "market"
+    })
 
-    # 数字4桁のコードのみ抽出（ETF等を除外）
-    df["コード"] = df["コード"].astype(str)
-    df = df[df["コード"].str.match(r"^\d{4}$")]
+    df = df[["code", "name", "market"]]
 
-    # yfinance用シンボル
-    df["symbol"] = df["コード"] + ".T"
+    # 東証のみ（ETF等を除きたい場合はここを調整）
+    df = df[df["market"].str.contains("市場", na=False)]
 
-    out_df = (
-        df[["symbol"]]
-        .drop_duplicates()
-        .sort_values("symbol")
-    )
+    # yfinance 用シンボル
+    df["symbol"] = df["code"].astype(str) + ".T"
+
+    df = df[["symbol", "code", "name"]].drop_duplicates()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    out_df.to_csv(OUTPUT_FILE, index=False, encoding="utf-8")
+    df.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
 
-    print(f"✅ tickers.csv 作成完了: {len(out_df)} 銘柄")
-    print(f"📄 出力先: {OUTPUT_FILE}")
+    print(f"✅ tickers.csv 作成完了: {len(df)} 銘柄")
+    print(f"📄 出力先: {OUTPUT_CSV}")
 
 if __name__ == "__main__":
     main()

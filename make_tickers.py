@@ -14,22 +14,20 @@ def main():
     r = requests.get(JPX_URL, timeout=30)
     r.raise_for_status()
 
-    # xls（古いExcel）なので engine 指定
     df = pd.read_excel(BytesIO(r.content), engine="xlrd")
 
-    # 必要な列だけ抽出
+    # 列名を安全に確認
+    print("📄 Excel columns:", df.columns.tolist())
+
     df = df.rename(columns={
         "コード": "code",
-        "銘柄名": "name",
-        "市場・商品区分": "market"
+        "銘柄名": "name"
     })
 
-    df = df[["code", "name", "market"]]
+    # 必須列がある行だけ
+    df = df[["code", "name"]].dropna()
 
-    # 東証のみ（ETF等を除きたい場合はここを調整）
-    df = df[df["market"].str.contains("市場", na=False)]
-
-    # yfinance 用シンボル
+    # yfinance 用
     df["symbol"] = df["code"].astype(str) + ".T"
 
     df = df[["symbol", "code", "name"]].drop_duplicates()

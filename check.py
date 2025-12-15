@@ -16,7 +16,7 @@ def send_ifttt(message: str):
     payload = {"value1": message}
     r = requests.post(IFTTT_WEBHOOK_URL, json=payload, timeout=10)
     r.raise_for_status()
-    print("✅ IFTTT通知を送信しました")
+    print("✅ IFTTT通知送信")
 
 def main():
     if not os.path.exists(TICKERS_CSV):
@@ -24,6 +24,12 @@ def main():
         return
 
     df_tickers = pd.read_csv(TICKERS_CSV)
+
+    # 🔴 列チェック（事故防止）
+    required_cols = {"symbol", "code", "name"}
+    if not required_cols.issubset(df_tickers.columns):
+        raise RuntimeError(f"tickers.csv の列が不正: {df_tickers.columns}")
+
     print(f"📈 対象銘柄数: {len(df_tickers)}")
 
     new_lows = []
@@ -49,10 +55,9 @@ def main():
             if len(lows) < 2:
                 continue
 
-            last_low = float(lows.iloc[-1])
-            prev_min = float(lows.iloc[:-1].min())
+            last_low = lows.iloc[-1].item()
+            prev_min = lows.iloc[:-1].min().item()
 
-            # ⭐ 1年新安値判定
             if last_low <= prev_min:
                 new_lows.append(
                     f"{code} {name} 安値={last_low:.2f}"

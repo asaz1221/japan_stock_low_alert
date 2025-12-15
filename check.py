@@ -54,9 +54,9 @@ def main():
             lows = df["Low"].dropna()
             if len(lows) < 2:
                 continue
+                    last_low = lows.iloc[-1].values[0]
+                    prev_min = lows.iloc[:-1].min().values[0]
 
-            last_low = lows.iloc[-1].item()
-            prev_min = lows.iloc[:-1].min().item()
 
             if last_low <= prev_min:
                 new_lows.append(

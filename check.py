@@ -5,103 +5,88 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime
 
-# ===== 設定 =====
+# =========================
+# 設定
+# =========================
+BATCH_SIZE = 500  # 1回で処理する銘柄数
+NOTIFIED_FILE = "notified.csv"
+
 load_dotenv()
-
 IFTTT_WEBHOOK_URL = os.getenv("IFTTT_WEBHOOK_URL")
-TICKERS_CSV = "data/tickers.csv"
-NOTIFIED_FILE = "data/notified.csv"   # 通知済み銘柄の永続化
+BATCH_INDEX = int(os.getenv("BATCH_INDEX", "0"))  # Render側で設定可
 
-if not IFTTT_WEBHOOK_URL:
-    raise RuntimeError("IFTTT_WEBHOOK_URL が設定されていません")
-
-# ===== 通知 =====
-def send_ifttt_notification(message: str):
+# =========================
+# 通知
+# =========================
+def send_ifttt(message: str):
     payload = {"value1": message}
     r = requests.post(IFTTT_WEBHOOK_URL, json=payload, timeout=10)
-    r.raise_for_status()
+    if r.status_code == 200:
+        print("✅ IFTTT通知送信")
+    else:
+        print("⚠️ IFTTT通知失敗", r.text)
 
-# ===== メインロジック =====
+# =========================
+# 通知済み管理
+# =========================
+def load_notified():
+    if not os.path.exists(NOTIFIED_FILE):
+        return set()
+    return set(pd.read_csv(NOTIFIED_FILE)["symbol"])
+
+def save_notified(symbols):
+    pd.DataFrame({"symbol": sorted(symbols)}).to_csv(
+        NOTIFIED_FILE, index=False
+    )
+
+# =========================
+# メイン
+# =========================
 def main():
-    if not os.path.exists(TICKERS_CSV):
-        print("⚠️ tickers.csv が見つかりません")
+    tickers_csv = "data/tickers.csv"
+    if not os.path.exists(tickers_csv):
+        print("❌ tickers.csv が見つかりません")
         return
 
-    df = pd.read_csv(TICKERS_CSV, encoding="cp932")
-    if "symbol" not in df.columns:
-        print("⚠️ CSVに symbol 列がありません")
-        return
+    all_tickers = pd.read_csv(tickers_csv)["symbol"].dropna().tolist()
+    total = len(all_tickers)
 
-    tickers = df["symbol"].dropna().unique().tolist()
-    print(f"📈 対象銘柄数: {len(tickers)}")
+    start = BATCH_INDEX * BATCH_SIZE
+    end = start + BATCH_SIZE
+    tickers = all_tickers[start:end]
 
-    # 通知済み銘柄の読み込み
-    notified = set()
-    if os.path.exists(NOTIFIED_FILE):
-        notified_df = pd.read_csv(NOTIFIED_FILE)
-        notified = set(notified_df["symbol"].astype(str))
+    print(f"📈 全銘柄数: {total}")
+    print(f"🔹 処理範囲: {start} - {min(end, total)}")
 
+    notified = load_notified()
     new_hits = []
 
     for t in tickers:
         try:
-            df_stock = yf.download(
-                t,
-                period="1y",
-                progress=False,
-                auto_adjust=False
-            )
-
-            if df_stock.empty:
+            df = yf.download(t, period="1y", progress=False)
+            if df.empty or "Low" not in df:
                 continue
 
-            # Low 列取得（MultiIndex 対応）
-            if isinstance(df_stock.columns, pd.MultiIndex):
-                if ("Low", "") in df_stock.columns:
-                    lows = df_stock[("Low", "")].dropna()
-                else:
-                    continue
-            else:
-                if "Low" not in df_stock.columns:
-                    continue
-                lows = df_stock["Low"].dropna()
-
+            lows = df["Low"].dropna()
             if len(lows) < 2:
                 continue
 
             last_low = float(lows.iloc[-1])
             prev_min = float(lows.iloc[:-1].min())
 
-            # 🔴 新安値 & 未通知
             if last_low <= prev_min and t not in notified:
-                new_hits.append(f"{t} 1年安値: {last_low:.2f}")
+                new_hits.append(f"{t} 安値 {last_low:.2f}")
                 notified.add(t)
 
         except Exception as e:
-            print(f"⚠️ {t} エラー: {e}")
+            print(f"⚠️ {t}: {e}")
 
-    # 新安値なし → 何もしない
-    if not new_hits:
+    if new_hits:
+        msg = "📢 新安値銘柄\n" + "\n".join(new_hits)
+        send_ifttt(msg)
+        save_notified(notified)
+    else:
         print("📌 新安値銘柄なし")
-        return
 
-    # 通知済み保存
-    os.makedirs(os.path.dirname(NOTIFIED_FILE), exist_ok=True)
-    pd.DataFrame({"symbol": sorted(notified)}).to_csv(
-        NOTIFIED_FILE, index=False
-    )
-
-    # 通知
-    msg = (
-        "📢 1年安値を更新した銘柄\n"
-        f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-        + "\n".join(new_hits)
-    )
-
-    print(msg)
-    send_ifttt_notification(msg)
-    print("✅ 通知送信完了")
-
-# ===== エントリーポイント =====
 if __name__ == "__main__":
     main()

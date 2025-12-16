@@ -2,114 +2,99 @@ import pandas as pd
 import yfinance as yf
 import requests
 import os
-import time
 
-# =========================
-# 設定
-# =========================
+# ========= 設定 =========
 TICKERS_CSV = "data/tickers.csv"
-IFTTT_URL = os.environ.get("IFTTT_WEBHOOK_URL")  # Renderの環境変数
-SLEEP_SEC = 0.1  # 連続アクセス防止
+NOTIFIED_CSV = "data/notified.csv"
+LINE_WEBHOOK_URL = os.environ.get("LINE_WEBHOOK_URL")
 
-# =========================
-# 1銘柄チェック
-# =========================
-def check_one(symbol, code, name):
+# ========= LINE通知 =========
+def send_line(message: str):
+    if not LINE_WEBHOOK_URL:
+        print("⚠️ LINE_WEBHOOK_URL 未設定")
+        return
+
+    payload = {"value1": message}
     try:
-        df = yf.download(
-            symbol,
-            period="1y",
-            progress=False,
-            auto_adjust=True
-        )
-    except Exception:
-        return None
+        r = requests.post(LINE_WEBHOOK_URL, json=payload, timeout=10)
+        if r.status_code == 200:
+            print("✅ LINE通知送信")
+        else:
+            print(f"⚠️ LINE通知失敗: {r.status_code}")
+    except Exception as e:
+        print(f"❌ LINE送信エラー: {e}")
 
-    if df.empty or "Low" not in df.columns:
-        return None
-
-    lows = df["Low"].dropna()
-
-    # 取引日が1年分ない銘柄は除外
-    if len(lows) < 252:
-        return None
-
-    # 今日の安値
-    today_low = float(lows.iloc[-1])
-
-    # 過去1年（今日を除く）の最安値
-    past_year_low = float(lows.iloc[-252:-1].min())
-
-    # 過去1年最安値を更新したら通知対象
-    if today_low < past_year_low:
-        return {
-            "code": code,
-            "name": name,
-            "today_low": today_low,
-            "past_year_low": past_year_low
-        }
-
-    return None
-
-# =========================
-# メイン処理
-# =========================
+# ========= メイン処理 =========
 def main():
-    tickers = pd.read_csv(TICKERS_CSV)
-    print(f"📈 対象銘柄数: {len(tickers)}")
+    # 銘柄CSV読み込み
+    df = pd.read_csv(TICKERS_CSV)
 
-    results = []
+    # 通知済みCSV（なければ作成）
+    if os.path.exists(NOTIFIED_CSV):
+        notified = pd.read_csv(NOTIFIED_CSV)
+    else:
+        notified = pd.DataFrame(columns=["symbol"])
 
-    for _, row in tickers.iterrows():
+    notified_set = set(notified["symbol"])
+
+    for _, row in df.iterrows():
         symbol = row["symbol"]
         code = row["code"]
         name = row["name"]
 
-        r = check_one(symbol, code, name)
-        if r:
-            results.append(r)
+        # すでに通知済みはスキップ
+        if symbol in notified_set:
+            continue
 
-        time.sleep(SLEEP_SEC)
+        try:
+            data = yf.download(
+                symbol,
+                period="1y",
+                interval="1d",
+                progress=False,
+                auto_adjust=False
+            )
 
-    if not results:
-        print("✅ 過去1年最安値更新銘柄なし")
-        return
+            # データなし対策
+            if data.empty or "Low" not in data:
+                print(f"⚠️ {code} {name} データなし（スキップ）")
+                continue
 
-    # =========================
-    # 表示
-    # =========================
-    print("📢 過去1年最安値更新銘柄")
-    lines = []
+            lows = data["Low"].dropna()
 
-    for r in results:
-        line = (
-            f"{r['code']} {r['name']} "
-            f"安値={r['today_low']:.2f}"
-        )
-        print(line)
+            # データ不足対策
+            if len(lows) < 2:
+                print(f"⚠️ {code} {name} データ不足（スキップ）")
+                continue
 
-        lines.append(
-            "📉 過去1年最安値更新\n"
-            f"{r['code']} {r['name']}\n"
-            f"本日の安値: {r['today_low']:.2f}円\n"
-            f"直近1年最安値: {r['past_year_low']:.2f}円"
-        )
+            # 数値取得（FutureWarning回避）
+            last_low = float(lows.iloc[-1])
+            past_min = float(lows.iloc[:-1].min())
 
-    # =========================
-    # IFTTT送信
-    # =========================
-    if IFTTT_URL:
-        message = "\n\n".join(lines)
-        requests.post(
-            IFTTT_URL,
-            json={"value1": message}
-        )
-        print("✅ IFTTT通知を送信しました")
-    else:
-        print("⚠ IFTTT_WEBHOOK_URL が未設定です")
+            # 過去1年最安値更新チェック
+            if last_low <= past_min:
+                message = (
+                    f"{code} {name}\n"
+                    f"📉 過去1年最安値更新\n"
+                    f"安値 = {last_low:.2f}"
+                )
+                print(message)
+                send_line(message)
 
-# =========================
-# 実行
-# =========================
+                # 通知済みに追加
+                notified_set.add(symbol)
+                notified = pd.concat(
+                    [notified, pd.DataFrame([{"symbol": symbol}])],
+                    ignore_index=True
+                )
+
+        except Exception as e:
+            print(f"❌ {code} {name} 取得失敗: {e}")
+            continue
+
+    # 通知済み保存
+    notified.to_csv(NOTIFIED_CSV, index=False)
+
+# ========= 実行 =========
 if __name__ == "__main__":
     main()
